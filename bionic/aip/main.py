@@ -7,6 +7,7 @@ import pickle
 import os
 import sys
 
+from bionic.aip.task import Task
 from bionic.deps.optdep import import_optional_dependency
 from bionic.gcs import get_gcs_fs_without_warnings
 
@@ -15,7 +16,7 @@ def _run(ipath, gcs_fs):
     cloudpickle = import_optional_dependency("cloudpickle")
 
     with gcs_fs.open(ipath, "rb") as f:
-        task = cloudpickle.load(f)
+        task: Task = cloudpickle.load(f)
 
     # Now that we have the task, set up logging.
     _set_up_logging(task.job_id(), task.config.project_name)

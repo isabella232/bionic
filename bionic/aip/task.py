@@ -2,11 +2,10 @@
 Data model for task running on AI platform
 """
 import logging
-from typing import Callable, Optional, Any
+from typing import Callable, Optional
 
 import attr
 
-from bionic.aip.client import get_aip_client
 from bionic.aip.future import Future
 from bionic.deps.optdep import import_optional_dependency
 
@@ -49,11 +48,12 @@ class Config:
 
 @attr.s(auto_attribs=True, frozen=True)
 class Task:
+    # This task object will be serialized and sent to AIP. Hence, all entities
+    # here must be serializable as well.
     name: str
     function: Callable
     config: Config
     task_config: TaskConfig
-    gcs_fs: Any  # AbstractFileSystem-like object, not necessarily a subclass.
 
     def job_id(self):
         return f"{self.config.uuid}_{self.name}"
@@ -101,19 +101,17 @@ class Task:
 
         return output
 
-    def _stage(self):
+    def _stage(self, gcs_fs):
         cloudpickle = import_optional_dependency("cloudpickle")
 
         path = self.inputs_uri()
         logging.info(f"Staging task {self.name} at {path}")
 
-        with self.gcs_fs.open(path, "wb") as f:
+        with gcs_fs.open(path, "wb") as f:
             cloudpickle.dump(self, f)
 
-    def submit(self) -> Future:
-        aip_client = get_aip_client()
-
-        self._stage()
+    def submit(self, gcs_fs, aip_client) -> Future:
+        self._stage(gcs_fs)
         spec = self._ai_platform_job_spec()
 
         logging.info(f"Submitting {self.config.project_name}: {self}")
@@ -127,5 +125,9 @@ class Task:
         url = f'https://console.cloud.google.com/ai-platform/jobs/{spec["jobId"]}'
         logging.info(f"Started task on AI Platform: {url}")
         return Future(
-            self.gcs_fs, self.config.project_name, self.job_id(), self.output_uri()
+            gcs_fs=gcs_fs,
+            aip_client=aip_client,
+            project_name=self.config.project_name,
+            job_id=self.job_id(),
+            output_uri=self.output_uri(),
         )

@@ -1,10 +1,8 @@
 import logging
 import pickle
 import time
-from concurrent.futures import Future as ConcurrentFuture, TimeoutError, CancelledError
+from concurrent.futures import TimeoutError, CancelledError
 from enum import Enum, auto
-
-from bionic.aip.client import get_aip_client
 
 
 class AipError(Exception):
@@ -41,8 +39,10 @@ class State(Enum):
         }
 
 
-class Future(ConcurrentFuture):
-    """This future represents a job running on AI platform
+class Future:
+    """
+    A Future represents a job running on AI platform. This class mimics
+    concurrent.futures.Future.
 
     The result of the running job will be pickled, and this future can load that pickle.
     You can find more information about the job details and states at
@@ -50,12 +50,14 @@ class Future(ConcurrentFuture):
 
     """
 
-    def __init__(self, gcs_fs, project_name: str, job_id: str, output: str):
+    def __init__(
+        self, gcs_fs, aip_client, project_name: str, job_id: str, output_uri: str
+    ):
         self.gcs_fs = gcs_fs
         self.project_name = project_name
         self.job_id = job_id
-        self.output = output
-        self.aip = get_aip_client()
+        self.output = output_uri
+        self.aip_client = aip_client
         self.done_callbacks = []
 
         # These are used for caching of the results when the remote job is
@@ -68,7 +70,7 @@ class Future(ConcurrentFuture):
         return f"projects/{self.project_name}/jobs/{self.job_id}"
 
     def cancel(self):
-        request = self.aip.projects().jobs().cancel(name=self.name)
+        request = self.aip_client.projects().jobs().cancel(name=self.name)
         request.execute()
         return True
 
@@ -77,7 +79,7 @@ class Future(ConcurrentFuture):
             assert self.state.is_finished()
             return self.state, self.error
 
-        request = self.aip.projects().jobs().get(name=self.name)
+        request = self.aip_client.projects().jobs().get(name=self.name)
         response = request.execute()
         state, error = State[response["state"]], response.get("errorMessage", "")
 

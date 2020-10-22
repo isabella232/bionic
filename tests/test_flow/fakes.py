@@ -1,69 +1,15 @@
 import io
 import logging
+import os
 import re
+import shutil
 from contextlib import contextmanager
-from functools import partial
 from pathlib import Path
 from unittest.mock import Mock
-from uuid import uuid4
 
-from bionic.aip.future import Future as AipFuture
 from bionic.aip.main import _run as run_aip
-from bionic.aip.task import Task as AipTask
 from bionic.utils.files import ensure_parent_dir_exists
 from bionic.utils.urls import path_from_url
-
-
-class FakeAipFuture(AipFuture):
-    """
-    A mock implementation of Future that finished successfully.
-    """
-
-    def __init__(self, project_name: str, job_id: str, output: str):
-        self.project_name = project_name
-        self.job_id = job_id
-        self.output = output
-
-    def _get_state_and_error(self):
-        from bionic.aip.future import State
-
-        return State.SUCCEEDED, ""
-
-
-class FakeAipTask(AipTask):
-    """
-    A mock implementation of Task that runs the job locally using a
-    subprocess instead of running it on AIP.
-    """
-
-    def submit(self) -> AipFuture:
-        self._stage()
-        spec = self._ai_platform_job_spec()
-
-        logging.info(f"Submitting test {self.config.project_name}: {self}")
-        import subprocess
-
-        subprocess.check_call(spec["trainingInput"]["args"])
-        return FakeAipFuture(self.config.project_name, self.job_id(), self.output_uri())
-
-
-class FakeAipExecutor:
-    """
-    A mock version of AipExecutor to submit FakeTasks that uses
-    subprocess to execute the tasks instead of using AIP. Useful for
-    running tests locally without using AIP.
-    """
-
-    def __init__(self, aip_config):
-        self._aip_config = aip_config
-
-    def submit(self, task_config, fn, *args, **kwargs):
-        return FakeAipTask(
-            name="a" + str(uuid4()).replace("-", ""),
-            config=self._aip_config,
-            task_config=task_config,
-            function=partial(fn, *args, **kwargs),
-        ).submit()
 
 
 # TODO It would be nice to use a different fsspec implementation here instead
@@ -78,8 +24,8 @@ class FakeAipExecutor:
 # We can override 1) but we need to get 2) fixed in fsspec before we can replace
 # this implementation.
 class FakeGcsFs:
-    def __init__(self, make_dict):
-        self._files_by_url: dict = make_dict()
+    def __init__(self, shared_dict):
+        self._files_by_url: dict = shared_dict
 
     def cat_file(self, url):
         with self.open(url, "rb") as f:
@@ -171,28 +117,65 @@ class FakeGcsFs:
             f.write(content_bytes)
 
 
-def fake_aip_client(gcs_fs, caplog):
-    def create_aip_job(body, parent):
-        # AIP executions do not transmit logs to local instance of bionic.
-        # Emulate this behavior by setting the log level; this should filter out
-        # all (or almost all) the logs. Tests that check the log output will
-        # only test against logs which are printed locally.
-        with caplog.at_level(logging.CRITICAL):
-            assert body["trainingInput"]["args"][:3] == [
-                "python",
-                "-m",
-                "bionic.aip.main",
-            ]
-            run_aip(body["trainingInput"]["args"][3], gcs_fs)
+@contextmanager
+def temporarily_filter_all_logs():
+    class FilterAllLogs(logging.Filter):
+        def filter(self, rec):
+            return 0
+
+    logger = logging.getLogger()
+    filter_all_logs = FilterAllLogs()
+    try:
+        logger.addFilter(filter_all_logs)
+        yield
+    finally:
+        logger.removeFilter(filter_all_logs)
+
+
+@contextmanager
+def temporarily_clean_cache_dir(tmp_path):
+    cache_dir = str(tmp_path / "BNTESTDATA")
+    assert os.path.exists(cache_dir)
+
+    backup_dir = str(tmp_path / "BACKUP")
+    assert not os.path.exists(backup_dir)
+
+    try:
+        os.rename(cache_dir, backup_dir)
+        yield
+    finally:
+        shutil.rmtree(cache_dir)
+        os.rename(backup_dir, cache_dir)
+
+
+class FakeAipClient:
+    def __init__(self, gcs_fs, tmp_path):
+        self.gcs_fs = gcs_fs
+        self.tmp_path = tmp_path
+
+    def _create_aip_job(self, body, parent):
+        assert body["trainingInput"]["args"][:3] == [
+            "python",
+            "-m",
+            "bionic.aip.main",
+        ]
+
+        input_uri = body["trainingInput"]["args"][3]
+        assert self.gcs_fs.exists(input_uri)
+
+        # AIP execution do not have access to local disk cache and do not send
+        # back logs to local bionic instance. Emulate this behavior while
+        # running the AIP job.
+        with temporarily_filter_all_logs(), temporarily_clean_cache_dir(self.tmp_path):
+            run_aip(input_uri, self.gcs_fs)
+
         return Mock()
 
-    mock_aip_client = Mock()
-    mock_aip_client.projects().jobs().create = create_aip_job
-    mock_aip_client.projects().jobs().get().execute.return_value = {
-        "state": "SUCCEEDED"
-    }
-
-    return mock_aip_client
+    def projects(self):
+        projects = Mock()
+        projects.jobs().create = self._create_aip_job
+        projects.jobs().get().execute.return_value = {"state": "SUCCEEDED"}
+        return projects
 
 
 class InstrumentedFilesystem:
