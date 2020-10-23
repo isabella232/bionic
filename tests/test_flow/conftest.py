@@ -128,6 +128,18 @@ def gcs_builder(builder, tmp_gcs_url_prefix):
 
 
 @pytest.fixture
+def fake_gcs_builder(builder, fake_gcs_fs, caplog):
+    with run_in_fake_gcp(fake_gcs_fs, caplog):
+        builder = builder.build().to_builder()
+
+        builder.set("core__persistent_cache__gcs__bucket_name", "some-bucket")
+        builder.set("core__persistent_cache__gcs__object_path", "")
+        builder.set("core__persistent_cache__gcs__enabled", True)
+
+        yield builder
+
+
+@pytest.fixture
 def aip_builder(gcs_builder, gcp_project):
     gcs_builder.set("core__aip_execution__enabled", True)
     gcs_builder.set("core__aip_execution__gcp_project_name", gcp_project)
