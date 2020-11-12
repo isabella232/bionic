@@ -205,3 +205,80 @@ def test_same_func_different_names():
     assert CodeHasher.hash(f1) == CodeHasher.hash(f1)
     assert CodeHasher.hash(f2) == CodeHasher.hash(f2)
     assert CodeHasher.hash(f1) == CodeHasher.hash(f2)
+
+
+global_var_10 = 10
+global_var_10_copy = 10
+global_var_20 = 20
+
+
+def test_global_variable_references():
+    def f1():
+        return global_var_10
+
+    def f2():
+        return global_var_10_copy
+
+    def f3():
+        return global_var_20
+
+    assert CodeHasher.hash(f1, True) == CodeHasher.hash(f1, True)
+    assert CodeHasher.hash(f2, True) == CodeHasher.hash(f2, True)
+    assert CodeHasher.hash(f3, True) == CodeHasher.hash(f3, True)
+
+    assert CodeHasher.hash(f1, True) == CodeHasher.hash(f2, True)
+    assert CodeHasher.hash(f1, True) != CodeHasher.hash(f3, True)
+
+
+def test_free_variable_references():
+    free_var_10 = 10
+    free_var_10_copy = 10
+    free_var_20 = 20
+
+    def f1():
+        return free_var_10
+
+    def f2():
+        return free_var_10_copy
+
+    def f3():
+        return free_var_20
+
+    assert CodeHasher.hash(f1, True) == CodeHasher.hash(f1, True)
+    assert CodeHasher.hash(f2, True) == CodeHasher.hash(f2, True)
+    assert CodeHasher.hash(f3, True) == CodeHasher.hash(f3, True)
+
+    assert CodeHasher.hash(f1, True) == CodeHasher.hash(f2, True)
+    assert CodeHasher.hash(f1, True) != CodeHasher.hash(f3, True)
+
+
+def test_function_references():
+    def ref10():
+        return 10
+
+    def ref10_copy():
+        return 10
+
+    def ref20():
+        return 20
+
+    def f1():
+        return ref10()
+
+    def f2():
+        return ref10_copy()
+
+    def f3():
+        return ref20()
+
+    assert CodeHasher.hash(f1, True) == CodeHasher.hash(f1, True)
+    assert CodeHasher.hash(f2, True) == CodeHasher.hash(f2, True)
+    assert CodeHasher.hash(f3, True) == CodeHasher.hash(f3, True)
+
+    assert CodeHasher.hash(f1, True) == CodeHasher.hash(f2, True)
+    assert CodeHasher.hash(f1, True) != CodeHasher.hash(f3, True)
+
+
+# TODO: Add more complicated tests, like changes in functions in
+# another module, functions with inner functions, recurisve references,
+# etc. Also add tests for classes once we hash classes.
